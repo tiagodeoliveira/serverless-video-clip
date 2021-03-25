@@ -1,0 +1,12 @@
+{
+  "name": "VideoClipping",
+  "displayName": "VideoClipping",
+  "expo": {
+    "name": "VideoClipping",
+    "slug": "VideoClipping",
+    "version": "1.0.0",
+    "assetBundlePatterns": [
+      "**/*"
+    ]
+  }
+}

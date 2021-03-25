@@ -1,0 +1,61 @@
+{
+    "Comment": "Transmission lifecycle.",
+    "StartAt": "Schedule start channel",
+    "States": {
+        "Schedule start channel": {
+            "Type": "Task",
+            "Resource": "${ScheduleStartChannelFuncionArn}",
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.TaskFailed"
+                    ],
+                    "IntervalSeconds": 5,
+                    "MaxAttempts": 3,
+                    "BackoffRate": 1.5
+                }
+            ],
+            "Next": "Wait Channel Start Time"
+        },
+        "Wait Channel Start Time": {
+            "Type": "Wait",
+            "TimestampPath": "$.start",
+            "Next": "Start Channel"
+        },
+        "Start Channel": {
+            "Type": "Task",
+            "Resource": "${StartChannelFuncionArn}",
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.TaskFailed"
+                    ],
+                    "IntervalSeconds": 5,
+                    "MaxAttempts": 3,
+                    "BackoffRate": 1.5
+                }
+            ],
+            "Next": "Wait Transmission Finish"            
+        },
+        "Wait Transmission Finish": {
+            "Type": "Wait",
+            "TimestampPath": "$.end",
+            "Next": "Stop channel"
+        },
+        "Stop channel": {
+            "Type": "Task",
+            "Resource": "${StopChannelFunctionArn}",
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.TaskFailed"
+                    ],
+                    "IntervalSeconds": 10,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 1.5
+                }
+            ],
+            "End": true
+        }
+    }      
+}

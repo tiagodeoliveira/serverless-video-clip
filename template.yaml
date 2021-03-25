@@ -1,0 +1,966 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Serverless video clipping stack
+
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: python3.8
+    Handler: handler.lambda_handler    
+  Api:
+    Cors:
+      AllowHeaders: "'*'"
+      AllowMethods: "'*'"
+      AllowOrigin: "'*'"
+    MethodSettings:
+    - LoggingLevel: INFO
+      ResourcePath: '/*'  
+      HttpMethod: '*'
+
+Parameters:
+  MediaLiveChannelIdIndexName:
+    Type: String
+    Default: medialive_channel_id-index
+  ClipsTableEventIdIndex:
+    Type: String
+    Default: event_id-index
+  VotesTableEventIdIndex:
+    Type: String
+    Default: clip_id-index
+
+Resources:
+  CloudWatchRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - >-
+          arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties: 
+      CloudWatchRoleArn: !GetAtt CloudWatchRole.Arn
+
+  LambdaDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: sam-dependencies
+      ContentUri: ./functions/dependencies
+      CompatibleRuntimes:
+      - python3.8
+      RetentionPolicy: Retain
+#    Metadata:
+#      BuildMethod: makefile
+
+  BeginTransmissionLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/begin_transmission/
+
+      Environment:
+        Variables:
+          TRANSMISSION_TABLE: !Ref TransmissionTable
+          MEDIALIVE_MEDIAPACKAGE_ROLE: !GetAtt MedialiveMediapackageRole.Arn
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'iam:PassRole'
+          Resource:
+          - !GetAtt MedialiveMediapackageRole.Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:PutItem'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'medialive:TagResource'
+          - 'medialive:CreateInput'
+          - 'medialive:CreateChannel'
+          - 'medialive:CreateInputSecurityGroup'
+          - 'mediapackage:CreateChannel'
+          - 'mediapackage:TagResource'
+          - 'mediapackage:CreateOriginEndpoint'
+          - 'mediapackage-vod:TagResource'
+          - 'mediapackage-vod:CreatePackagingGroup'
+          - 'mediapackage-vod:CreatePackagingConfiguration'
+          Resource:
+          - '*'
+      Events:
+        BeginTransmission:
+          Type: Api
+          Properties:
+            Path: /transmission
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  ListTransmissionLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/list_transmission/
+      Environment:
+        Variables:
+          TRANSMISSION_TABLE: !Ref TransmissionTable
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:Scan'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+      Events:
+        ListTransmissions:
+          Type: Api
+          Properties:
+            Path: /transmission
+            Method: get
+            Auth:
+              ApiKeyRequired: true
+
+  StartChannelLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/start_channel/
+      Environment:
+        Variables:
+          TRANSMISSION_TABLE: !Ref TransmissionTable
+          TRANSMISSION_INDEX_NAME: !Ref MediaLiveChannelIdIndexName
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'medialive:StartChannel'
+          Resource:
+          - '*'
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:Query'
+          Resource:
+          - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TransmissionTable}/index/${MediaLiveChannelIdIndexName}'
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:UpdateItem'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+
+  StopChannelLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/stop_channel/
+      Environment:
+        Variables:
+          TRANSMISSION_TABLE: !Ref TransmissionTable
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:GetItem'
+          - 'dynamodb:UpdateItem'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'medialive:UntagResource'
+          - 'medialive:DeleteInput'
+          - 'medialive:DeleteChannel'
+          - 'medialive:DeleteInputSecurityGroup'
+          - 'medialive:StopChannel'
+          - 'mediapackage:DeleteOriginEndpoint'
+          - 'mediapackage:DeleteChannel'
+          - 'mediapackage:UntagResource'
+          Resource:
+          - '*'
+      Events:
+        EndTransmission:
+          Type: Api
+          Properties:
+            Path: /transmission/{id}
+            Method: delete
+            Auth:
+              ApiKeyRequired: true
+
+  CreateClipLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/create_clip/
+      Environment:
+        Variables:
+          TRANSMISSION_TABLE: !Ref TransmissionTable
+          CLIP_TABLE: !Ref ClipTable
+          ASSET_BUCKET: !Ref AssetBucket
+          MEDIAPACKAGE_JOB_ROLE: !GetAtt MediaPackageHarvestRole.Arn
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:GetItem'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:GetItem'
+          - 'dynamodb:PutItem'
+          Resource:
+          - !GetAtt ClipTable.Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'mediapackage:CreateHarvestJob'
+          Resource:
+          - "*"
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'iam:PassRole'
+          Resource:
+          - !GetAtt MediaPackageHarvestRole.Arn
+      Events:
+        CreateClip:
+          Type: Api
+          Properties:
+            Path: /transmission/{id}/clip
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  ScheduleStartChannelFuncion:
+    Type: AWS::Serverless::Function
+    Properties:
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/schedule_channel_start/
+      Environment:
+        Variables:
+          TRANSMISSION_TABLE: !Ref TransmissionTable
+          TRANSMISSION_INDEX_NAME: !Ref MediaLiveChannelIdIndexName
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:Query'
+          Resource:
+          - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TransmissionTable}/index/${MediaLiveChannelIdIndexName}'
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:UpdateItem'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+
+  ChannelStartedLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/channel_started/
+      Environment:
+        Variables:
+          TRANSMISSION_TABLE: !Ref TransmissionTable
+          TRANSMISSION_INDEX_NAME: !Ref MediaLiveChannelIdIndexName
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:GetItem'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:Query'
+          Resource:
+          - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TransmissionTable}/index/${MediaLiveChannelIdIndexName}'
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:UpdateItem'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+      Events:
+        ChannelStartedEvent:
+          Type: CloudWatchEvent
+          Properties:
+            Pattern:
+              source:
+                - aws.medialive
+              detail-type:
+                - MediaLive Channel State Change
+              detail:
+                state:
+                - RUNNING
+
+  ChannelStoppedLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Timeout: 120
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/channel_stopped/
+      Environment:
+        Variables:
+          TRANSMISSION_TABLE: !Ref TransmissionTable
+          TRANSMISSION_INDEX_NAME: !Ref MediaLiveChannelIdIndexName
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:GetItem'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:Query'
+          Resource:
+          - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TransmissionTable}/index/${MediaLiveChannelIdIndexName}'
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:UpdateItem'
+          Resource:
+          - !GetAtt TransmissionTable.Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'medialive:UntagResource'
+          - 'medialive:DeleteInput'
+          - 'medialive:DeleteChannel'
+          - 'medialive:DeleteInputSecurityGroup'
+          - 'medialive:StopChannel'
+          - 'mediapackage:DeleteOriginEndpoint'
+          - 'mediapackage:DeleteChannel'
+          - 'mediapackage:UntagResource'
+          Resource:
+          - '*'
+      Events:
+        ChannelStartedEvent:
+          Type: CloudWatchEvent
+          Properties:
+            Pattern:
+              source:
+                - aws.medialive
+              detail-type:
+                - MediaLive Channel State Change
+              detail:
+                state:
+                - STOPPING
+
+  TransmissionUpdatedLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Timeout: 300
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/transmission_feed/
+      Environment:
+        Variables:
+          GRAPHQL_API: !GetAtt AppSyncAdminUIAPI.GraphQLUrl
+          GRAPHQL_API_KEY: !GetAtt AppSyncAPIKey.ApiKey
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:*'
+          Resource:
+          - !Sub "${TransmissionTable.Arn}/stream/*"
+      Events:
+        TransmissionNotification:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt TransmissionTable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 100
+            Enabled: true
+        ClipNotification:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt ClipTable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 100
+            Enabled: true
+
+  HarvestJobStateChanged:
+    Type: AWS::Serverless::Function
+    Properties:
+      Layers:
+      - !Ref LambdaDependenciesLayer
+      CodeUri: functions/harvest_job_state_changed/
+      Environment:
+        Variables:
+          CLIP_TABLE: !Ref ClipTable
+          INGESTION_ROLE: !GetAtt MediaPackageHarvestRole.Arn
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'dynamodb:UpdateItem'
+          Resource:
+          - !GetAtt ClipTable.Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'mediapackage-vod:CreateAsset'
+          Resource:
+          - '*'
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'iam:PassRole'
+          Resource:
+          - !GetAtt MediaPackageHarvestRole.Arn          
+      Events:
+        JobFailed:
+          Type: CloudWatchEvent
+          Properties:
+            Pattern:
+              source:
+                - aws.mediapackage
+              detail-type:
+                - MediaPackage HarvestJob Notification
+
+  TransmissionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: transmissions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      - AttributeName: medialive_channel_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+      GlobalSecondaryIndexes:
+      - IndexName: !Ref MediaLiveChannelIdIndexName
+        KeySchema:
+        - AttributeName: medialive_channel_id
+          KeyType: HASH
+        Projection:
+          ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+  ClipTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: clips
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      - AttributeName: event_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+      GlobalSecondaryIndexes:
+      - IndexName: !Ref ClipsTableEventIdIndex
+        KeySchema:
+        - AttributeName: event_id
+          KeyType: HASH
+        Projection:
+          ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+  VotesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: votes
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      - AttributeName: clip_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+      GlobalSecondaryIndexes:
+      - IndexName: !Ref VotesTableEventIdIndex
+        KeySchema:
+        - AttributeName: clip_id
+          KeyType: HASH
+        Projection:
+          ProjectionType: ALL        
+
+  AssetBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: video-clipping-assets
+
+  ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Enabled: true
+      Name: VideoClippingAPI
+      StageKeys:
+        - RestApiId: !Ref ServerlessRestApi
+          StageName: !Ref ServerlessRestApiProdStage
+
+  ApiUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      ApiStages:
+        - ApiId: !Ref ServerlessRestApi
+          Stage: !Ref ServerlessRestApiProdStage
+      UsagePlanName: live-plan
+
+  ApiUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref ApiUsagePlan
+
+  MediaPackageHarvestRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - s3.amazonaws.com
+              - mediapackage.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: s3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                - "s3:PutObject"
+                - "s3:GetObject"
+                - "s3:GetBucketLocation"
+                - "s3:GetBucketRequestPayment"
+                - "s3:ListBucket"
+                Resource:
+                - !GetAtt AssetBucket.Arn
+                - !Sub "${AssetBucket.Arn}/*"
+
+  MedialiveMediapackageRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - medialive.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: mediapackageAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                - "mediapackage:DescribeChannel"
+                Resource:
+                - "*"
+
+  TransmissionLifecycle:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/resources_flow.asl.json
+      DefinitionSubstitutions:
+        ScheduleStartChannelFuncionArn: !GetAtt ScheduleStartChannelFuncion.Arn
+        StartChannelFuncionArn: !GetAtt StartChannelLambda.Arn
+        StopChannelFunctionArn: !GetAtt StopChannelLambda.Arn
+      Events:
+        ChannelCreatedEvent:
+          Type: CloudWatchEvent
+          Properties:
+            Pattern:
+              source:
+                - aws.medialive
+              detail-type:
+                - MediaLive Channel State Change
+              detail:
+                state:
+                - CREATED
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ScheduleStartChannelFuncion
+        - LambdaInvokePolicy:
+            FunctionName: !Ref StartChannelLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref StopChannelLambda
+
+# ====================================================================
+# AppSync
+# ====================================================================
+  AppSyncAdminUIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: appsync.amazonaws.com
+          Action:
+            - sts:AssumeRole
+      Path: /service-role/
+      Policies:
+      - PolicyName: listDynamodbItems
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+              - "dynamodb:GetItem"
+              - "dynamodb:Query"
+              - "dynamodb:Scan"
+              Resource:
+              - !GetAtt TransmissionTable.Arn
+              - !Sub "${TransmissionTable.Arn}*"
+              - !GetAtt ClipTable.Arn
+              - !Sub "${ClipTable.Arn}*"
+              - !GetAtt VotesTable.Arn
+              - !Sub "${VotesTable.Arn}*"              
+            - Effect: Allow
+              Action:
+              - "dynamodb:PutItem"
+              Resource:
+              - !GetAtt VotesTable.Arn
+
+  AppSyncAdminUIAPI:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      Name: adminui-api
+      AuthenticationType: API_KEY
+
+  AppSyncAdminUISchema:
+    Type: AWS::AppSync::GraphQLSchema
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      DefinitionS3Location: graphql/schema.graphql
+
+  AppSyncTransmissionsDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      Name: transmissions
+      Type: AMAZON_DYNAMODB
+      DynamoDBConfig:
+        AwsRegion: !Ref AWS::Region
+        TableName: !Ref TransmissionTable
+      ServiceRoleArn: !GetAtt AppSyncAdminUIRole.Arn
+  AppSyncClipsDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      Name: clip
+      Type: AMAZON_DYNAMODB
+      DynamoDBConfig:
+        AwsRegion: !Ref AWS::Region
+        TableName: !Ref ClipTable
+      ServiceRoleArn: !GetAtt AppSyncAdminUIRole.Arn
+  AppSyncVotesDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      Name: vote
+      Type: AMAZON_DYNAMODB
+      DynamoDBConfig:
+        AwsRegion: !Ref AWS::Region
+        TableName: !Ref VotesTable
+      ServiceRoleArn: !GetAtt AppSyncAdminUIRole.Arn
+  AppSyncNoneDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      Name: none
+      Type: NONE
+      ServiceRoleArn: !GetAtt AppSyncAdminUIRole.Arn
+
+  GetTransmissionResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Query
+      FieldName: getTransmission
+      DataSourceName: !GetAtt AppSyncTransmissionsDataSource.Name
+      RequestMappingTemplate: '
+        {
+          "version": "2017-02-28",
+          "operation": "GetItem",
+          "key": {
+            "id": $util.dynamodb.toDynamoDBJson($ctx.args.id),
+          },
+        }
+      '
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  ListTransmissionResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Query
+      FieldName: listTransmissions
+      DataSourceName: !GetAtt AppSyncTransmissionsDataSource.Name
+      RequestMappingTemplate: '
+        {
+          "version": "2017-02-28",
+          "operation": "Scan",
+          "filter": #if($context.args.filter) $util.transform.toDynamoDBFilterExpression($ctx.args.filter) #else null #end,
+          "limit": $util.defaultIfNull($ctx.args.limit, 20),
+          "nextToken": $util.toJson($util.defaultIfNullOrEmpty($ctx.args.nextToken, null)),
+        }
+      '
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  CreateTransmissionResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Mutation
+      FieldName: createTransmission
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  DeleteTransmissionResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Mutation
+      FieldName: deleteTransmission
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  UpdateTransmissionResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Mutation
+      FieldName: updateTransmission
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  OnCreateTransmissionResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Subscription
+      FieldName: onCreateTransmission
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  OnUpdateTransmissionResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Subscription
+      FieldName: onUpdateTransmission
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  OnDeleteTransmissionResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Subscription
+      FieldName: onDeleteTransmission
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+
+  GetClipResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Query
+      FieldName: getClip
+      DataSourceName: !GetAtt AppSyncClipsDataSource.Name
+      RequestMappingTemplate: '
+        {
+          "version": "2017-02-28",
+          "operation": "GetItem",
+          "key": {
+            "id": $util.dynamodb.toDynamoDBJson($ctx.args.id),
+          },
+        }
+      '
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  ListClipResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Query
+      FieldName: listClips
+      DataSourceName: !GetAtt AppSyncClipsDataSource.Name
+      RequestMappingTemplate: '
+        {
+            "version" : "2017-02-28",
+            "operation" : "Query",
+            "index" : "event_id-index",
+            "query" : {
+                "expression": "event_id = :event_id",
+                "expressionValues" : {
+                    ":event_id" :$util.dynamodb.toDynamoDBJson($ctx.args.filter.event_id)
+                }
+            }
+        }      
+      '
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  CreateClipResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Mutation
+      FieldName: createClip
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  DeleteClipResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Mutation
+      FieldName: deleteClip
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  UpdateClipResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Mutation
+      FieldName: updateClip
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  OnCreateClipResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Subscription
+      FieldName: onCreateClip
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  OnUpdateClipResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Subscription
+      FieldName: onUpdateClip
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  OnDeleteClipResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Subscription
+      FieldName: onDeleteClip
+      DataSourceName: !GetAtt AppSyncNoneDataSource.Name
+      RequestMappingTemplate: '{ "version": "2017-02-28", "payload": $util.toJson($context.args) }'
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+
+  ListVoteResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Query
+      FieldName: listVotes
+      DataSourceName: !GetAtt AppSyncVotesDataSource.Name
+      RequestMappingTemplate: '
+        {
+          "version": "2017-02-28",
+          "operation": "Scan",
+          "filter": #if($context.args.filter) $util.transform.toDynamoDBFilterExpression($ctx.args.filter) #else null #end,
+          "limit": $util.defaultIfNull($ctx.args.limit, 20),
+          "nextToken": $util.toJson($util.defaultIfNullOrEmpty($ctx.args.nextToken, null)),
+        }
+      '
+      ResponseMappingTemplate: '$util.toJson($context.result)'
+  CreateVoteResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      TypeName: Mutation
+      FieldName: createVote
+      DataSourceName: !GetAtt AppSyncVotesDataSource.Name
+      RequestMappingTemplate: '
+        {
+            "version" : "2017-02-28",
+            "operation" : "PutItem",
+            "key" : {
+                ## If object "id" should come from GraphQL arguments, change to $util.dynamodb.toDynamoDBJson($ctx.args.id)
+                "id": $util.dynamodb.toDynamoDBJson($util.autoId()),
+            },
+            "attributeValues" : $util.dynamodb.toMapValuesJson($ctx.args)
+        }
+      '
+      ResponseMappingTemplate: '$util.toJson($context.result)'      
+
+  AppSyncAPIKey:
+    Type: AWS::AppSync::ApiKey
+    Properties:
+      ApiId: !GetAtt AppSyncAdminUIAPI.ApiId
+      Expires: 1632839738
+
+# ================================================
+# Cognito Pools
+# ================================================
+  ClientAppPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: VideoClippingPool
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+      UsernameAttributes:
+        - email
+      Schema:
+        - AttributeDataType: String
+          Name: email
+          Required: false
+
+  ClientAppPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref ClientAppPool
+      ClientName: VideoClippingPoolClientApp
+      GenerateSecret: false
+
+Outputs:
+  StreamApi:
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${ServerlessRestApiProdStage}/"
+  AppSyncAPIKey:
+    Value: !Ref AppSyncAPIKey

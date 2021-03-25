@@ -1,0 +1,96 @@
+{
+    "TableName": "",
+    "IndexName": "",
+    "AttributesToGet": [
+        ""
+    ],
+    "Limit": 0,
+    "Select": "ALL_PROJECTED_ATTRIBUTES",
+    "ScanFilter": {
+        "KeyName": {
+            "AttributeValueList": [
+                {
+                    "S": "",
+                    "N": "",
+                    "B": null,
+                    "SS": [
+                        ""
+                    ],
+                    "NS": [
+                        ""
+                    ],
+                    "BS": [
+                        null
+                    ],
+                    "M": {
+                        "KeyName": {}
+                    },
+                    "L": [
+                        {}
+                    ],
+                    "NULL": true,
+                    "BOOL": true
+                }
+            ],
+            "ComparisonOperator": "NULL"
+        }
+    },
+    "ConditionalOperator": "AND",
+    "ExclusiveStartKey": {
+        "KeyName": {
+            "S": "",
+            "N": "",
+            "B": null,
+            "SS": [
+                ""
+            ],
+            "NS": [
+                ""
+            ],
+            "BS": [
+                null
+            ],
+            "M": {
+                "KeyName": {}
+            },
+            "L": [
+                {}
+            ],
+            "NULL": true,
+            "BOOL": true
+        }
+    },
+    "ReturnConsumedCapacity": "TOTAL",
+    "TotalSegments": 0,
+    "Segment": 0,
+    "ProjectionExpression": "",
+    "FilterExpression": "",
+    "ExpressionAttributeNames": {
+        "KeyName": ""
+    },
+    "ExpressionAttributeValues": {
+        "KeyName": {
+            "S": "",
+            "N": "",
+            "B": null,
+            "SS": [
+                ""
+            ],
+            "NS": [
+                ""
+            ],
+            "BS": [
+                null
+            ],
+            "M": {
+                "KeyName": {}
+            },
+            "L": [
+                {}
+            ],
+            "NULL": true,
+            "BOOL": true
+        }
+    },
+    "ConsistentRead": true
+}

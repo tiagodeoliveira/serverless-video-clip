@@ -1,0 +1,225 @@
+type Clips @model {
+	id: String
+	event_id: String
+	start: String
+	end: String
+	state: String
+	name: String
+	description: String
+	created_at: String
+	stream_url: String
+}
+
+type ClipsConnection {
+	items: [Clips]
+	nextToken: String
+}
+
+type Mutation {
+	createTransmission(
+		id: String,
+		start: String,
+		end: String,
+		state: String,
+		endpoints: String,
+		name: String,
+		description: String,
+		created_at: String,
+		stream_url: String
+	): Transmissions
+	updateTransmission(
+		id: String,
+		start: String,
+		end: String,
+		state: String,
+		endpoints: String,
+		name: String,
+		description: String,
+		created_at: String,
+		stream_url: String
+	): Transmissions
+	deleteTransmission(id: String!): Transmissions
+	createClip(
+		event_id: String,
+		id: String,
+		start: String,
+		end: String,
+		state: String,
+		name: String,
+		description: String,
+		created_at: String,
+		stream_url: String
+	): Clips
+	updateClip(
+		event_id: String,
+		id: String,
+		start: String,
+		end: String,
+		state: String,
+		name: String,
+		description: String,
+		created_at: String,
+		stream_url: String
+	): Clips
+	deleteClip(id: String!): Clips
+	createVote(
+		id: String,
+		clip_id: String,
+		vote: String,
+		created_at: String,
+		user_id: String
+	): Votes
+	updateVote(
+		id: String,
+		clip_id: String,
+		vote: String,
+		created_at: String,
+		user_id: String
+	): Votes
+	deleteVote(id: String!): Votes
+}
+
+type Query {
+	getTransmission(id: String!): Transmissions
+	listTransmissions(filter: TableTransmissionsFilterInput, limit: Int, nextToken: String): TransmissionsConnection
+	getClip(id: String!): Clips
+	listClips(filter: TableClipsFilterInput!, limit: Int, nextToken: String): ClipsConnection
+	getVote(id: String!): Votes
+	listVotes(filter: TableVotesFilterInput!, limit: Int, nextToken: String): VotesConnection
+	getVotesCount(filter: VotesCountFilter!, limit: Int, nextToken: String): VotesCount
+}
+
+type Subscription {
+	onCreateTransmission(
+		start: String,
+		end: String,
+		state: String,
+		name: String,
+		created_at: String
+	): Transmissions
+		@aws_subscribe(mutations: ["createTransmission"])
+	onUpdateTransmission(
+		start: String,
+		end: String,
+		state: String,
+		name: String,
+		created_at: String
+	): Transmissions
+		@aws_subscribe(mutations: ["updateTransmission"])
+	onDeleteTransmission(
+		start: String,
+		end: String,
+		state: String,
+		name: String,
+		created_at: String
+	): Transmissions
+		@aws_subscribe(mutations: ["deleteTransmission"])
+	onCreateClip(
+		event_id: String,
+		start: String,
+		end: String,
+		state: String,
+		name: String
+	): Clips
+		@aws_subscribe(mutations: ["createClip"])
+	onUpdateClip(
+		event_id: String,
+		start: String,
+		end: String,
+		state: String,
+		name: String
+	): Clips
+		@aws_subscribe(mutations: ["updateClip"])
+	onDeleteClip(
+		event_id: String,
+		start: String,
+		end: String,
+		state: String,
+		name: String
+	): Clips
+		@aws_subscribe(mutations: ["deleteClip"])
+	onCreateVote(
+		id: String,
+		clip_id: String,
+		vote: String,
+		created_at: String,
+		user_id: String
+	): Votes
+		@aws_subscribe(mutations: ["createVote"])
+	onDeleteVote(
+		id: String,
+		clip_id: String,
+		vote: String,
+		created_at: String,
+		user_id: String
+	): Votes
+		@aws_subscribe(mutations: ["deleteVote"])
+}
+
+input TableClipsFilterInput {
+	id: String
+	event_id: String!
+	state: String
+	start: String
+	end: String
+	name: String
+	description: String
+}
+
+input TableTransmissionsFilterInput {
+	id: String
+	state: String
+	start: String
+	end: String
+	endpoints: String
+	name: String
+	description: String
+}
+
+input TableVotesFilterInput {
+	id: String
+	clip_id: String
+	vote: String
+	created_at: String
+	user_id: String
+}
+
+type Transmissions @model {
+	id: String
+	start: String
+	end: String
+	state: String
+	endpoints: String
+	name: String
+	description: String
+	created_at: String
+	stream_url: String
+}
+
+type TransmissionsConnection {
+	items: [Transmissions]
+	nextToken: String
+}
+
+type Votes @model {
+	id: String
+	clip_id: String
+	vote: String
+	created_at: String
+	user_id: String
+}
+
+type VotesConnection {
+	items: [Votes]
+	nextToken: String
+}
+
+type VotesCount {
+	count: Int
+	nextToken: String
+}
+
+input VotesCountFilter {
+	clip_id: String!
+	vote: String!
+}

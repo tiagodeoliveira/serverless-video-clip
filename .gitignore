@@ -1,0 +1,8 @@
+.DS_Store
+node_modules
+
+.aws-sam/
+
+*__py_chache__*
+
+.vscode
